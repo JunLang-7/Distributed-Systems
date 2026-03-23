@@ -8,13 +8,13 @@ package raft
 // raft interface.
 
 import (
-	//	"bytes"
+	"bytes"
 	"math/rand"
 	"sort"
 	"sync"
 	"time"
 
-	//	"6.5840/labgob"
+	"6.5840/labgob"
 	"6.5840/labrpc"
 	"6.5840/raftapi"
 	tester "6.5840/tester1"
@@ -63,14 +63,13 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
-	// Your code here (3C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// raftstate := w.Bytes()
-	// rf.persister.Save(raftstate, nil)
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(rf.currentTerm)
+	e.Encode(rf.votedFor)
+	e.Encode(rf.log)
+	raftstate := w.Bytes()
+	rf.persister.Save(raftstate, nil)
 }
 
 // restore previously persisted state.
@@ -78,19 +77,20 @@ func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
 	}
-	// Your code here (3C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var currentTerm, votedFor int
+	var log []LogEntry
+	if d.Decode(&currentTerm) != nil ||
+		d.Decode(&votedFor) != nil ||
+		d.Decode(&log) != nil {
+		DPrintf("{Node %v} failed to read persisted log", rf.me)
+	} else {
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = log
+		rf.commitIndex, rf.lastApplied = rf.log[0].Index, rf.log[0].Index
+	}
 }
 
 // how many bytes in Raft's persisted log?
@@ -131,6 +131,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	// If command received from client: append entry to local log,
 	// respond after entry applied to state machine (§5.3)
 	rf.log = append(rf.log, LogEntry{Term: rf.currentTerm, Command: command, Index: index})
+	rf.persist()
 	rf.nextIndex[rf.me], rf.matchIndex[rf.me] = index+1, index
 	DPrintf("{Node %v} starts agreement on a new log entry with command %v in term %v", rf.me, command, rf.currentTerm)
 	for peer := range rf.peers {
@@ -216,6 +217,7 @@ func (rf *Raft) StartElection() {
 	rf.currentTerm += 1
 	// Vote for self
 	rf.votedFor = rf.me
+	rf.persist()
 	lastLog := rf.log[len(rf.log)-1]
 	args := &RequestVoteArgs{
 		Term:         rf.currentTerm,
@@ -308,15 +310,19 @@ func (rf *Raft) leaderReplication(peer int) {
 		if args.Term == rf.currentTerm && rf.role == Leader {
 			if reply.Success {
 				// If successful: update nextIndex and matchIndex for follower (§5.3)
-				rf.matchIndex[peer] = args.PrevLogIndex + len(args.Entries)
-				rf.nextIndex[peer] = rf.matchIndex[peer] + 1
-				// advance CommitIndex if possible
-				rf.advanceCommitIndex()
+				newMatchIndex := args.PrevLogIndex + len(args.Entries)
+				if newMatchIndex > rf.matchIndex[peer] {
+					rf.matchIndex[peer] = newMatchIndex
+					rf.nextIndex[peer] = rf.matchIndex[peer] + 1
+					// advance CommitIndex if possible
+					rf.advanceCommitIndex()
+				}
 			} else {
 				if reply.Term > rf.currentTerm {
 					// If AppendEntries RPC received from new leader: convert to follower
 					rf.ChangeRole(Follower)
 					rf.currentTerm, rf.votedFor = reply.Term, -1
+					rf.persist()
 				} else if reply.Term == rf.currentTerm {
 					// If AppendEntries fails because of log inconsistency:
 					// decrement nextIndex and retry (§5.3)

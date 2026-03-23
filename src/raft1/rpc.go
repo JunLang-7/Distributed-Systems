@@ -30,14 +30,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > rf.currentTerm {
 		rf.currentTerm, rf.votedFor = args.Term, -1
 		rf.ChangeRole(Follower)
+		rf.persist()
 	}
 	// If votedFor is null or candidateId, and candidate’s log is at
 	// least as up-to-date as receiver’s log, grant vote (§5.2, §5.4)
 	lastLog := rf.log[len(rf.log)-1]
 	if (rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		(args.LastLogTerm > lastLog.Term || (args.LastLogTerm == lastLog.Term && args.LastLogIndex >= lastLog.Index)) {
-		// Log check should be here (3B).
 		rf.votedFor = args.CandidateId
+		rf.persist()
 		// reset election timer to avoid split vote
 		rf.electionTick.Reset(rf.RandomElectionTimeout())
 		reply.Term, reply.VoteGranted = rf.currentTerm, true
@@ -110,6 +111,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// set currentTerm = T, convert to follower (§5.1)
 	if args.Term > rf.currentTerm {
 		rf.currentTerm, rf.votedFor = args.Term, -1
+		rf.persist()
 	}
 	rf.ChangeRole(Follower)
 	rf.electionTick.Reset(rf.RandomElectionTimeout())
@@ -147,6 +149,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for index, entry := range args.Entries {
 		if entry.Index-firstIndex >= len(rf.log) || entry.Term != rf.log[entry.Index-firstIndex].Term {
 			rf.log = append(rf.log[:entry.Index-firstIndex], args.Entries[index:]...)
+			rf.persist()
 			break
 		}
 	}
