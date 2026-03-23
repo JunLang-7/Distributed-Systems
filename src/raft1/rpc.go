@@ -1,5 +1,7 @@
 package raft
 
+import "6.5840/raftapi"
+
 // RequestVoteArgs RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
@@ -168,5 +170,76 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // sendAppendEntries send AppendEntries RPC to server.
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+// InstallSnapshotArgs InstallSnapshot RPC arguments structure.
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	Data              []byte
+}
+
+// InstallSnapshotReply InstallSnapshot RPC reply structure.
+type InstallSnapshotReply struct {
+	Term int
+}
+
+// InstallSnapshot RPC handler. have the leader send
+// an InstallSnapshot RPC if it doesn't have the log
+// entries required to bring a follower up to date.
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	reply.Term = rf.currentTerm
+	// Reply immediately if term < currentTerm
+	if args.Term < rf.currentTerm {
+		rf.mu.Unlock()
+		return
+	}
+	if args.Term > rf.currentTerm {
+		rf.currentTerm, rf.votedFor = args.Term, -1
+		rf.persist()
+	}
+	rf.ChangeRole(Follower)
+	rf.electionTick.Reset(rf.RandomElectionTimeout())
+
+	// check if out-dated log
+	if args.LastIncludedIndex <= rf.commitIndex {
+		rf.mu.Unlock()
+		return
+	}
+
+	// truncate log
+	firstIndex := rf.log[0].Index
+	lastIndex := rf.log[len(rf.log)-1].Index
+	if args.LastIncludedIndex > lastIndex ||
+		args.LastIncludedTerm != rf.log[args.LastIncludedIndex-firstIndex].Term {
+		// Discard the entire log
+		rf.log = []LogEntry{{Term: args.LastIncludedTerm, Index: args.LastIncludedIndex}}
+	} else {
+		// If existing log entry has same index and term as snapshot’s
+		// last included entry, retain log entries following it and reply
+		newLog := make([]LogEntry, lastIndex-args.LastIncludedIndex+1)
+		copy(newLog, rf.log[args.LastIncludedIndex-firstIndex:])
+		rf.log = newLog
+		rf.log[0].Command = nil
+	}
+	// Reset state machine using snapshot content
+	rf.commitIndex, rf.lastApplied = args.LastIncludedIndex, args.LastIncludedIndex
+	rf.persister.Save(rf.encodeState(), args.Data)
+	rf.mu.Unlock()
+
+	rf.applyCh <- raftapi.ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      args.Data,
+		SnapshotTerm:  args.LastIncludedTerm,
+		SnapshotIndex: args.LastIncludedIndex,
+	}
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
 	return ok
 }

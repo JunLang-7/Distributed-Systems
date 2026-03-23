@@ -35,7 +35,7 @@ func (rf *Raft) ChangeRole(newRole Role) {
 		rf.electionTick.Reset(rf.RandomElectionTimeout())
 	case Leader:
 		rf.electionTick.Stop()
-		rf.heartbeatTick.Reset(rf.RandomHeartbeatTimeout())
+		rf.heartbeatTick.Reset(rf.HeartbeatTimeout())
 		for peer := range rf.peers {
 			rf.nextIndex[peer] = rf.log[len(rf.log)-1].Index + 1
 			rf.matchIndex[peer] = 0
@@ -52,7 +52,7 @@ type LogEntry struct {
 
 // Timeouts
 const (
-	ElectionTimeout  int64 = 1000
+	ElectionTimeout  int64 = 500
 	HeartbeatTimeout int64 = 100
 )
 
@@ -61,7 +61,7 @@ func (rf *Raft) RandomElectionTimeout() time.Duration {
 	return time.Duration(ms) * time.Millisecond
 }
 
-func (rf *Raft) RandomHeartbeatTimeout() time.Duration {
-	ms := HeartbeatTimeout + rf.rng.Int63()%HeartbeatTimeout
+func (rf *Raft) HeartbeatTimeout() time.Duration {
+	ms := HeartbeatTimeout
 	return time.Duration(ms) * time.Millisecond
 }

@@ -63,13 +63,17 @@ func (rf *Raft) GetState() (int, bool) {
 // after you've implemented snapshots, pass the current snapshot
 // (or nil if there's not yet a snapshot).
 func (rf *Raft) persist() {
+	raftstate := rf.encodeState()
+	rf.persister.Save(raftstate, rf.persister.ReadSnapshot())
+}
+
+func (rf *Raft) encodeState() []byte {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
 	e.Encode(rf.log)
-	raftstate := w.Bytes()
-	rf.persister.Save(raftstate, nil)
+	return w.Bytes()
 }
 
 // restore previously persisted state.
@@ -105,8 +109,20 @@ func (rf *Raft) PersistBytes() int {
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
-	// Your code here (3D).
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	firstIndex := rf.log[0].Index
+	if index <= firstIndex || index > rf.log[len(rf.log)-1].Index {
+		DPrintf("{Node %v} snapshot is out of right index}", rf.me)
+		return
+	}
+	// discard its log entries before `index`
+	newLog := make([]LogEntry, len(rf.log)-(index-firstIndex))
+	copy(newLog, rf.log[index-firstIndex:])
+	rf.log = newLog
+	rf.log[0].Command = nil
+	// save raft state into snapshot
+	rf.persister.Save(rf.encodeState(), snapshot)
 }
 
 // the service using Raft (e.g. a k/v server) wants to start
@@ -164,7 +180,7 @@ func (rf *Raft) replicator(peer int) {
 }
 
 func (rf *Raft) ticker() {
-	for true {
+	for {
 		select {
 		case <-rf.electionTick.C:
 			rf.mu.Lock()
@@ -176,7 +192,7 @@ func (rf *Raft) ticker() {
 			rf.mu.Lock()
 			if rf.role == Leader {
 				rf.BroadcastHeartbeat()
-				rf.heartbeatTick.Reset(rf.RandomHeartbeatTimeout())
+				rf.heartbeatTick.Reset(rf.HeartbeatTimeout())
 			}
 			rf.mu.Unlock()
 		}
@@ -184,7 +200,7 @@ func (rf *Raft) ticker() {
 }
 
 func (rf *Raft) applier() {
-	for true {
+	for {
 		rf.mu.Lock()
 		// check if the commitIndex is advanced
 		for rf.commitIndex <= rf.lastApplied {
@@ -278,9 +294,31 @@ func (rf *Raft) leaderReplication(peer int) {
 	}
 	firstIndex := rf.log[0].Index
 	prevLogIndex := rf.nextIndex[peer] - 1
-	// if prevLogIndex is out of range, send empty AppendEntries RPCs(heartbeat)
+	// if prevLogIndex is out of range, only send InstallSnapshot RPC
 	if prevLogIndex < firstIndex {
+		args := &InstallSnapshotArgs{
+			Term:              rf.currentTerm,
+			LeaderId:          rf.me,
+			LastIncludedIndex: firstIndex,
+			LastIncludedTerm:  rf.log[0].Term,
+			Data:              rf.persister.ReadSnapshot(),
+		}
 		rf.mu.Unlock()
+		reply := new(InstallSnapshotReply)
+		if rf.sendInstallSnapshot(peer, args, reply) {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			if rf.role == Leader && rf.currentTerm == args.Term {
+				if reply.Term > rf.currentTerm {
+					rf.ChangeRole(Follower)
+					rf.currentTerm, rf.votedFor = reply.Term, -1
+					rf.persist()
+				} else {
+					rf.matchIndex[peer], rf.nextIndex[peer] = args.LastIncludedIndex, args.LastIncludedIndex+1
+				}
+			}
+			DPrintf("{Node %v} send InstallSnapshot %v to {Node %v} and get reply %v", rf.me, args, peer, reply)
+		}
 		return
 	}
 	prevLogTerm := rf.log[prevLogIndex-firstIndex].Term
