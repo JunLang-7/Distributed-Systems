@@ -1,22 +1,21 @@
 package kvraft
 
 import (
-	"6.5840/kvsrv1/rpc"
-	"6.5840/kvtest1"
-	"6.5840/tester1"
-)
+	"time"
 
+	"6.5840/kvsrv1/rpc"
+	kvtest "6.5840/kvtest1"
+	tester "6.5840/tester1"
+)
 
 type Clerk struct {
 	clnt    *tester.Clnt
 	servers []string
-	leader int // last successful leader (index into servers[])
-	// You can add to this struct.
+	leader  int // last successful leader (index into servers[])
 }
 
 func MakeClerk(clnt *tester.Clnt, servers []string) kvtest.IKVClerk {
 	ck := &Clerk{clnt: clnt, servers: servers}
-	// You'll have to add code here.
 	return ck
 }
 
@@ -35,9 +34,21 @@ func (ck *Clerk) Leader() int {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
-
-	// You will have to modify this function.
-	return "", 0, ""
+	args := rpc.GetArgs{Key: key}
+	for {
+		for i := 0; i < len(ck.servers); i++ {
+			srv := (ck.leader + i) % len(ck.servers)
+			reply := new(rpc.GetReply)
+			if ok := ck.clnt.Call(ck.servers[srv], "KVServer.Get", &args, &reply); ok {
+				if reply.Err == rpc.ErrWrongLeader {
+					continue
+				}
+				ck.leader = srv
+				return reply.Value, reply.Version, reply.Err
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // Put updates key with value only if the version in the
@@ -58,6 +69,25 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // must match the declared types of the RPC handler function's
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
-	// You will have to modify this function.
-	return ""
+	args := rpc.PutArgs{Key: key, Value: value, Version: version}
+	resent := false
+	for {
+		for i := 0; i < len(ck.servers); i++ {
+			srv := (ck.leader + i) % len(ck.servers)
+			reply := new(rpc.PutReply)
+			if ok := ck.clnt.Call(ck.servers[srv], "KVServer.Put", &args, &reply); ok {
+				if reply.Err == rpc.ErrWrongLeader {
+					resent = true
+					continue
+				}
+				ck.leader = srv
+				if reply.Err == rpc.ErrVersion && resent {
+					return rpc.ErrMaybe
+				}
+				return reply.Err
+			}
+			resent = true
+		}
+		time.Sleep(time.Millisecond * 100)
+	}
 }
