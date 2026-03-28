@@ -123,6 +123,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	firstIndex := rf.log[0].Index
 	if args.PrevLogIndex < firstIndex {
 		reply.Term, reply.Success = rf.currentTerm, false
+		reply.ConflictIndex, reply.ConflictTerm = firstIndex, -1
 		return
 	}
 

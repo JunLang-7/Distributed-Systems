@@ -293,6 +293,13 @@ func (rf *Raft) leaderReplication(peer int) {
 		return
 	}
 	firstIndex := rf.log[0].Index
+	lastIndex := rf.log[len(rf.log)-1].Index
+	if rf.nextIndex[peer] < firstIndex {
+		rf.nextIndex[peer] = firstIndex
+	}
+	if rf.nextIndex[peer] > lastIndex+1 {
+		rf.nextIndex[peer] = lastIndex + 1
+	}
 	prevLogIndex := rf.nextIndex[peer] - 1
 	// if prevLogIndex is out of range, only send InstallSnapshot RPC
 	if prevLogIndex < firstIndex {
@@ -364,21 +371,24 @@ func (rf *Raft) leaderReplication(peer int) {
 				} else if reply.Term == rf.currentTerm {
 					// If AppendEntries fails because of log inconsistency:
 					// decrement nextIndex and retry (§5.3)
-					rf.nextIndex[peer] = reply.ConflictIndex
+					firstIndex := rf.log[0].Index
+					lastIndex := rf.log[len(rf.log)-1].Index
+					rf.nextIndex[peer] = min(max(reply.ConflictIndex, firstIndex), lastIndex + 1)
 					if reply.ConflictTerm != -1 {
-						firstIndex := rf.log[0].Index
-						// find nextIndex through binary search
-						left, right := firstIndex-1, args.PrevLogIndex
-						for left+1 < right {
-							mid := (left + right) / 2
-							if rf.log[mid-firstIndex].Term <= reply.ConflictTerm {
-								left = mid
-							} else {
-								right = mid
+						if args.PrevLogIndex >= firstIndex {
+							// find nextIndex through binary search
+							left, right := firstIndex-1, args.PrevLogIndex
+							for left+1 < right {
+								mid := (left + right) / 2
+								if rf.log[mid-firstIndex].Term <= reply.ConflictTerm {
+									left = mid
+								} else {
+									right = mid
+								}
 							}
-						}
-						if rf.log[right-firstIndex].Term == reply.ConflictTerm {
-							rf.nextIndex[peer] = right + 1
+							if right >= firstIndex && rf.log[right-firstIndex].Term == reply.ConflictTerm {
+								rf.nextIndex[peer] = right + 1
+							}
 						}
 					}
 				}
