@@ -1,6 +1,7 @@
 package kvraft
 
 import (
+	"bytes"
 	"sync"
 
 	"6.5840/kvraft1/rsm"
@@ -14,12 +15,12 @@ type KVServer struct {
 	me    int
 	rsm   *rsm.RSM
 	mu    sync.Mutex
-	store map[string]valueStore
+	Store map[string]ValueStore
 }
 
-type valueStore struct {
-	value   string
-	version rpc.Tversion
+type ValueStore struct {
+	Value   string
+	Version rpc.Tversion
 }
 
 // To type-cast req to the right type, take a look at Go's type switches or type
@@ -33,48 +34,48 @@ func (kv *KVServer) DoOp(req any) any {
 
 	switch req := req.(type) {
 	case rpc.GetArgs:
-		state, ok := kv.store[req.Key]
+		state, ok := kv.Store[req.Key]
 		if !ok {
 			return rpc.GetReply{Err: rpc.ErrNoKey}
 		}
-		return rpc.GetReply{Value: state.value, Version: state.version, Err: rpc.OK}
+		return rpc.GetReply{Value: state.Value, Version: state.Version, Err: rpc.OK}
 	case *rpc.GetArgs:
-		state, ok := kv.store[req.Key]
+		state, ok := kv.Store[req.Key]
 		if !ok {
 			return rpc.GetReply{Err: rpc.ErrNoKey}
 		}
-		return rpc.GetReply{Value: state.value, Version: state.version, Err: rpc.OK}
+		return rpc.GetReply{Value: state.Value, Version: state.Version, Err: rpc.OK}
 	case rpc.PutArgs:
-		state, ok := kv.store[req.Key]
+		state, ok := kv.Store[req.Key]
 		if !ok {
 			if req.Version != 0 {
 				return rpc.PutReply{Err: rpc.ErrNoKey}
 			}
-			kv.store[req.Key] = valueStore{value: req.Value, version: 1}
+			kv.Store[req.Key] = ValueStore{Value: req.Value, Version: 1}
 			return rpc.PutReply{Err: rpc.OK}
 		}
-		if req.Version != state.version {
+		if req.Version != state.Version {
 			return rpc.PutReply{Err: rpc.ErrVersion}
 		}
-		state.value = req.Value
-		state.version += 1
-		kv.store[req.Key] = state
+		state.Value = req.Value
+		state.Version += 1
+		kv.Store[req.Key] = state
 		return rpc.PutReply{Err: rpc.OK}
 	case *rpc.PutArgs:
-		state, ok := kv.store[req.Key]
+		state, ok := kv.Store[req.Key]
 		if !ok {
 			if req.Version != 0 {
 				return rpc.PutReply{Err: rpc.ErrNoKey}
 			}
-			kv.store[req.Key] = valueStore{value: req.Value, version: 1}
+			kv.Store[req.Key] = ValueStore{Value: req.Value, Version: 1}
 			return rpc.PutReply{Err: rpc.OK}
 		}
-		if req.Version != state.version {
+		if req.Version != state.Version {
 			return rpc.PutReply{Err: rpc.ErrVersion}
 		}
-		state.value = req.Value
-		state.version += 1
-		kv.store[req.Key] = state
+		state.Value = req.Value
+		state.Version += 1
+		kv.Store[req.Key] = state
 		return rpc.PutReply{Err: rpc.OK}
 	default:
 		return nil
@@ -82,12 +83,28 @@ func (kv *KVServer) DoOp(req any) any {
 }
 
 func (kv *KVServer) Snapshot() []byte {
-	// Your code here
-	return nil
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.Store)
+	return w.Bytes()
 }
 
 func (kv *KVServer) Restore(data []byte) {
-	// Your code here
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var store map[string]ValueStore
+	if d.Decode(&store) != nil {
+		panic("failed to decode snapshot")
+	} else {
+		kv.mu.Lock()
+		kv.Store = store
+		kv.mu.Unlock()
+	}
 }
 
 func (kv *KVServer) Get(args *rpc.GetArgs, reply *rpc.GetReply) {
@@ -117,7 +134,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, gid tester.Tgid, me int, persist
 	labgob.Register(rpc.PutArgs{})
 	labgob.Register(rpc.GetArgs{})
 
-	kv := &KVServer{me: me, mu: sync.Mutex{}, store: make(map[string]valueStore)}
+	kv := &KVServer{me: me, mu: sync.Mutex{}, Store: make(map[string]ValueStore)}
 
 	kv.rsm = rsm.MakeRSM(servers, me, persister, maxraftstate, kv)
 	// You may need initialization code here.

@@ -79,6 +79,13 @@ func MakeRSM(servers []*labrpc.ClientEnd, me int, persister *tester.Persister, m
 	if !tester.UseRaftStateMachine {
 		rsm.rf = raft.Make(servers, me, persister, rsm.applyCh)
 	}
+	// When a rsm server restarts, it should read the snapshot and,
+	// if the snapshot's length is greater than zero, pass the
+	// snapshot to the StateMachine's Restore() method.
+	snapshot := persister.ReadSnapshot()
+	if len(snapshot) > 0 {
+		rsm.sm.Restore(snapshot)
+	}
 	go rsm.reader()
 	return rsm
 }
@@ -102,13 +109,35 @@ func (rsm *RSM) reader() {
 				} else {
 					// Different request got committed at this index
 					// The original request must have lost leadership
-					if ch, exists := rsm.waitChByOpID[op.ID]; exists {
-						ch <- submitResult{rpc.ErrWrongLeader, rep}
-						delete(rsm.waitChByOpID, op.ID)
+					if ch, exists := rsm.waitChByOpID[expectID]; exists {
+						ch <- submitResult{rpc.ErrWrongLeader, nil}
+						delete(rsm.waitChByOpID, expectID)
 					}
 				}
 				delete(rsm.pendingLogByOpID, msg.CommandIndex)
 			}
+			rsm.mu.Unlock()
+			// if the Raft state size is approaching this threshold, save a snapshot
+			if rsm.maxraftstate != -1 && rsm.rf.PersistBytes() >= rsm.maxraftstate {
+				// need to snapshot
+				rsm.rf.Snapshot(msg.CommandIndex, rsm.sm.Snapshot())
+			}
+		}
+		if msg.SnapshotValid {
+			if len(msg.Snapshot) == 0 {
+				continue
+			}
+			rsm.mu.Lock()
+			for idx, opID := range rsm.pendingLogByOpID {
+				if idx <= msg.SnapshotIndex {
+					if ch, exists := rsm.waitChByOpID[opID]; exists {
+						ch <- submitResult{rpc.ErrWrongLeader, nil}
+						delete(rsm.waitChByOpID, opID)
+					}
+					delete(rsm.pendingLogByOpID, idx)
+				}
+			}
+			rsm.sm.Restore(msg.Snapshot)
 			rsm.mu.Unlock()
 		}
 	}
