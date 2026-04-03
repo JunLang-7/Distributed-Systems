@@ -39,29 +39,7 @@ func (kv *KVServer) DoOp(req any) any {
 			return rpc.GetReply{Err: rpc.ErrNoKey}
 		}
 		return rpc.GetReply{Value: state.Value, Version: state.Version, Err: rpc.OK}
-	case *rpc.GetArgs:
-		state, ok := kv.Store[req.Key]
-		if !ok {
-			return rpc.GetReply{Err: rpc.ErrNoKey}
-		}
-		return rpc.GetReply{Value: state.Value, Version: state.Version, Err: rpc.OK}
 	case rpc.PutArgs:
-		state, ok := kv.Store[req.Key]
-		if !ok {
-			if req.Version != 0 {
-				return rpc.PutReply{Err: rpc.ErrNoKey}
-			}
-			kv.Store[req.Key] = ValueStore{Value: req.Value, Version: 1}
-			return rpc.PutReply{Err: rpc.OK}
-		}
-		if req.Version != state.Version {
-			return rpc.PutReply{Err: rpc.ErrVersion}
-		}
-		state.Value = req.Value
-		state.Version += 1
-		kv.Store[req.Key] = state
-		return rpc.PutReply{Err: rpc.OK}
-	case *rpc.PutArgs:
 		state, ok := kv.Store[req.Key]
 		if !ok {
 			if req.Version != 0 {
