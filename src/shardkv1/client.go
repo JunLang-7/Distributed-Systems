@@ -9,6 +9,7 @@ package shardkv
 //
 
 import (
+	"6.5840/shardkv1/shardcfg"
 	"6.5840/shardkv1/shardgrp"
 
 	"6.5840/kvsrv1/rpc"
@@ -20,7 +21,7 @@ import (
 type Clerk struct {
 	clnt *tester.Clnt
 	sck  *shardctrler.ShardCtrler
-	rcks   map[tester.Tgid]*shardgrp.Clerk
+	rcks map[tester.Tgid]*shardgrp.Clerk
 	// You will have to modify this struct.
 }
 
@@ -41,19 +42,55 @@ func (ck *Clerk) GetClerk(gid tester.Tgid) (*shardgrp.Clerk, bool) {
 	return rck, ok
 }
 
-
 // Get a key from a shardgrp.  You can use shardcfg.Key2Shard(key) to
 // find the shard responsible for the key and ck.sck.Query() to read
 // the current configuration and lookup the servers in the group
 // responsible for key.  You can make a clerk for that group by
 // calling shardgrp.MakeClerk(ck.clnt, servers).
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
-	// You will have to modify this function.
-	return "", 0, ""
+	for {
+		config := ck.sck.Query()
+		shid := shardcfg.Key2Shard(key)
+		gid, servers, ok := config.GidServers(shid)
+		if !ok {
+			continue
+		}
+		if ck.rcks[gid] == nil {
+			clk := shardgrp.MakeClerk(ck.clnt, servers)
+			ck.rcks[gid] = clk
+		}
+		val, version, err := ck.rcks[gid].Get(key)
+		if err == rpc.ErrWrongGroup {
+			continue
+		}
+		return val, version, err
+	}
 }
 
 // Put a key to a shard group.
 func (ck *Clerk) Put(key string, value string, version rpc.Tversion) rpc.Err {
-	// You will have to modify this function.
-	return ""
+	uncertain := false
+	for {
+		config := ck.sck.Query()
+		shid := shardcfg.Key2Shard(key)
+		gid, servers, ok := config.GidServers(shid)
+		if !ok {
+			continue
+		}
+		if ck.rcks[gid] == nil {
+			clk := shardgrp.MakeClerk(ck.clnt, servers)
+			ck.rcks[gid] = clk
+		}
+		err := ck.rcks[gid].Put(key, value, version)
+		if err == rpc.ErrWrongGroup {
+			// We may have sent the RPCs but lost replies; keep this bit so a
+			// later ErrVersion can be surfaced as ErrMaybe.
+			uncertain = true
+			continue
+		}
+		if err == rpc.ErrVersion && uncertain {
+			return rpc.ErrMaybe
+		}
+		return err
+	}
 }
