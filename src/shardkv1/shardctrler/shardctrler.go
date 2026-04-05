@@ -17,6 +17,7 @@ import (
 
 const (
 	cfgCurrentKey = "shardcfg/current"
+	cfgNextKey    = "shardcfg/next"
 )
 
 // ShardCtrler for the controller and kv clerk.
@@ -56,6 +57,18 @@ func (sck *ShardCtrler) getClerk(cfg *shardcfg.ShardConfig, gid tester.Tgid) (*s
 // controller. In part A, this method doesn't need to do anything. In
 // B and C, this method implements recovery.
 func (sck *ShardCtrler) InitController() {
+	cur := sck.Query()
+	nextVal, _, err := sck.IKVClerk.Get(cfgNextKey)
+	if err != rpc.OK {
+		// nothing to change
+		return
+	}
+	next := shardcfg.FromString(nextVal)
+	// if there is a stored next configuration with a
+	// higher configuration number than the current one
+	if next.Num > cur.Num {
+		sck.ChangeConfigTo(next)
+	}
 }
 
 // Called once by the tester to supply the first configuration.  You
@@ -94,6 +107,20 @@ func (sck *ShardCtrler) InitConfig(cfg *shardcfg.ShardConfig) {
 // changes the configuration it may be superseded by another
 // controller.
 func (sck *ShardCtrler) ChangeConfigTo(new *shardcfg.ShardConfig) {
+	for {
+		// store `new` as next cfg
+		_, ver, err := sck.IKVClerk.Get(cfgNextKey)
+		if err == rpc.OK || err == rpc.ErrNoKey {
+			v := ver
+			if err == rpc.ErrNoKey {
+				v = 0
+			}
+			err = sck.IKVClerk.Put(cfgNextKey, new.String(), v)
+			if err == rpc.OK {
+				break
+			}
+		}
+	}
 	cur := sck.Query()
 	for i := range shardcfg.NShards {
 		if cur.Shards[i] == new.Shards[i] {
