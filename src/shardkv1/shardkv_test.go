@@ -720,3 +720,89 @@ func TestPartitionRecoveryUnreliableClerks5C(t *testing.T) {
 	)
 	partitionRecovery5C(t, false, NPARTITION, 5)
 }
+
+// Test that the controller can query and update the configuration
+// while one of the kvraft peers is down.
+func TestCtrlerWithKVraftPeerDown5D(t *testing.T) {
+	const (
+		NSEC = 5
+	)
+
+	ts := MakeTest(t, "Test (5D): controller with kvraft peer down...", true)
+	defer ts.Cleanup()
+
+	// Setup the KV service which also creates the controller using kvraft
+	ts.setupKVService()
+	ck := ts.MakeClerk()
+	ka, va := ts.SpreadPuts(ck, NKEYS)
+
+	sck := ts.ShardCtrler()
+
+	// Verify initial config
+	cfg := sck.Query()
+	if cfg.Num != 1 {
+		t.Fatalf("expected config num 1, got %d", cfg.Num)
+	}
+
+	// Shutdown one of the kvraft peers (in group 0 which is the controller's group)
+	ts.Group(tester.GRP0).ShutdownServer(0)
+
+	// Wait a bit for the failure to be detected
+	time.Sleep(500 * time.Millisecond)
+
+	// Query should still work - controller should be able to query with remaining peers
+	cfg = sck.Query()
+	if cfg.Num != 1 {
+		t.Fatalf("query failed after shutting down one peer: expected config num 1, got %d", cfg.Num)
+	}
+
+	// Now try to update the configuration by joining a new group
+	gid2 := ts.newGid()
+	if ok := ts.joinGroups(sck, []tester.Tgid{gid2}); !ok {
+		t.Fatalf("joinGroups failed while one kvraft peer was down")
+	}
+
+	// Verify the new config
+	cfg1 := sck.Query()
+	if cfg1.Num != 2 {
+		t.Fatalf("expected config num 2, got %d", cfg1.Num)
+	}
+	if !cfg1.IsMember(gid2) {
+		t.Fatalf("gid %d is not a member of config %v", gid2, cfg1)
+	}
+
+	// Bring the peer back up
+	ts.Group(tester.GRP0).StartServer(0)
+	ts.Group(tester.GRP0).ConnectOne(0)
+
+	// Wait for it to catch up
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify data is still accessible after peer recovery
+	for i := 0; i < len(ka); i++ {
+		ts.CheckGet(ck, ka[i], va[i], rpc.Tversion(1))
+	}
+
+	// Shutdown a different peer and test again
+	ts.Group(tester.GRP0).ShutdownServer(1)
+	time.Sleep(500 * time.Millisecond)
+
+	// Query should still work
+	cfg = sck.Query()
+	if cfg.Num != 2 {
+		t.Fatalf("query failed after shutting down second peer: expected config num 2, got %d", cfg.Num)
+	}
+
+	// Leave should still work with remaining peers
+	ts.leaveGroups(sck, []tester.Tgid{gid2})
+
+	cfg = sck.Query()
+	if cfg.Num != 3 {
+		t.Fatalf("expected config num 3 after leave, got %d", cfg.Num)
+	}
+
+	// Verify data is still accessible
+	for i := 0; i < len(ka); i++ {
+		ts.CheckGet(ck, ka[i], va[i], rpc.Tversion(1))
+	}
+}

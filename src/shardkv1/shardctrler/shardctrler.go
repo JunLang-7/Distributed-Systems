@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	kvsrv "6.5840/kvsrv1"
+	"6.5840/kvraft1"
 	"6.5840/kvsrv1/rpc"
 	kvtest "6.5840/kvtest1"
 	"6.5840/shardkv1/shardcfg"
@@ -38,11 +38,11 @@ type ShardCtrler struct {
 	leaseExpiry  int64
 }
 
-// Make a ShardCltler, which stores its state in a kvsrv.
+// Make a ShardCltler, which stores its state in a kvraft.
 func MakeShardCtrler(clnt *tester.Clnt) *ShardCtrler {
 	sck := &ShardCtrler{clnt: clnt, rcks: make(map[tester.Tgid]*shardgrp.Clerk), controllerID: kvtest.RandValue(8)}
-	srv := tester.ServerName(tester.GRP0, 0)
-	sck.IKVClerk = kvsrv.MakeClerk(clnt, srv)
+	srvs := []string{tester.ServerName(tester.GRP0, 0), tester.ServerName(tester.GRP0, 1), tester.ServerName(tester.GRP0, 2)}
+	sck.IKVClerk = kvraft.MakeClerk(clnt, srvs)
 	return sck
 }
 

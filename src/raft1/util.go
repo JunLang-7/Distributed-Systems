@@ -50,9 +50,9 @@ type LogEntry struct {
 	Index   int
 }
 
-// Timeouts
+// Timeouts - optimized for faster testing with kvraft
 const (
-	ElectionTimeout  int64 = 500
+	ElectionTimeout  int64 = 150
 	HeartbeatTimeout int64 = 100
 )
 

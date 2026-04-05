@@ -45,7 +45,7 @@ func MakeTestMaxRaft(t *testing.T, part string, reliable, partition bool, maxraf
 		partition:    partition,
 		maxraftstate: maxraftstate,
 	}
-	cfg := tester.MakeConfig(t, 1, reliable, "kvsrv1d", []string{})
+	cfg := tester.MakeConfig(t, 3, reliable, "kvraft1d", []string{})
 	ts.Test = kvtest.MakeTest(t, cfg, false, ts)
 	// XXX to avoid panic
 	tester.AnnotateTest(part, 1)
